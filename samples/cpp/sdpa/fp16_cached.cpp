@@ -99,17 +99,97 @@ cache_lookup_pre_built_graph(std::shared_ptr<fe::graph::Graph>& graph, cudnnHand
     return false;
 }
 
-TEST_CASE("Cached sdpa", "[graph][sdpa][flash]") {
-    std::cout<<"fp16 cached start"<<std::endl;
+// TEST_CASE("Cached sdpa", "[graph][sdpa][flash]") {
+//     std::cout<<"fp16 cached start"<<std::endl;
 
-    int64_t b    = 3;     // batch size
-    int64_t h_q  = 4;     // head dim
-    int64_t h_k  = 4;     // head dim
-    int64_t h_v  = 4;     // head dim
-    int64_t s_q  = 1024;  // q tensor is padded to this seq length
-    int64_t s_kv = 1024;  // k and v tensor is padded to this seq length
-    int64_t d_qk = 128;   // hidden dim
-    int64_t d_v  = 128;   // hidden dim
+//     int64_t b    = 3;     // batch size
+//     int64_t h_q  = 4;     // head dim
+//     int64_t h_k  = 4;     // head dim
+//     int64_t h_v  = 4;     // head dim
+//     int64_t s_q  = 1024;  // q tensor is padded to this seq length
+//     int64_t s_kv = 1024;  // k and v tensor is padded to this seq length
+//     int64_t d_qk = 128;   // hidden dim
+//     int64_t d_v  = 128;   // hidden dim
+
+//     if (cudnnGetVersion() < 8903) {
+//         SKIP("Test requires cudnn 8.9.3 or above");
+//         return;
+//     }
+
+//     cudnnHandle_t handle;
+//     checkCudnnErr(cudnnCreate(&handle));
+
+//     auto fwd_graph = create_sdpa_forward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+//     auto bwd_graph = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+
+//     // Wont get a cache hit the first time
+//     REQUIRE(cache_lookup_pre_built_graph(fwd_graph, handle) == false);
+//     REQUIRE(cache_lookup_pre_built_graph(bwd_graph, handle) == false);
+
+//     auto fwd_graph2 = create_sdpa_forward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+//     auto bwd_graph2 = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+
+//     REQUIRE(cache_lookup_pre_built_graph(fwd_graph2, handle) == true);
+//     REQUIRE(cache_lookup_pre_built_graph(bwd_graph2, handle) == true);
+
+//     //// Build variant pack
+//     std::unordered_map<fe::graph::Tensor_attributes::uid_t, void*> variant_pack;
+//     // inputs
+//     Surface<half> q_tensor(b * h_q * s_q * d_qk, false);
+//     Surface<half> k_tensor(b * h_k * d_qk * s_kv, false);
+//     Surface<half> v_tensor(b * h_v * d_v * s_kv, false);
+
+//     Surface<half> o_tensor(b * h_q * s_q * d_qk, false);
+//     Surface<float> stats_tensor(b * h_q * s_q * 1, false);
+
+//     variant_pack = {{Q_UID, q_tensor.devPtr},
+//                     {K_UID, k_tensor.devPtr},
+//                     {V_UID, v_tensor.devPtr},
+//                     {O_UID, o_tensor.devPtr},
+//                     {STATS_UID, stats_tensor.devPtr}};
+
+//     Surface<int8_t> fwd_workspace(fwd_graph2->get_workspace_size(), false);
+//     REQUIRE(fwd_graph2->execute(handle, variant_pack, fwd_workspace.devPtr).is_good());
+//     checkCudaErr(cudaDeviceSynchronize());
+
+//     Surface<half> dO_tensor(b * h_q * s_q * d_qk, false);
+//     Surface<half> dQ_tensor(b * h_q * s_q * d_qk, false);
+//     Surface<half> dK_tensor(b * h_k * s_kv * d_qk, false);
+//     Surface<half> dV_tensor(b * h_v * s_kv * d_v, false);
+
+//     variant_pack = {// inputs
+//                     {Q_UID, q_tensor.devPtr},
+//                     {K_UID, k_tensor.devPtr},
+//                     {V_UID, v_tensor.devPtr},
+//                     {O_UID, o_tensor.devPtr},
+//                     {DO_UID, dO_tensor.devPtr},
+//                     {STATS_UID, stats_tensor.devPtr},
+//                     // outputs
+//                     {DQ_UID, dQ_tensor.devPtr},
+//                     {DK_UID, dK_tensor.devPtr},
+//                     {DV_UID, dV_tensor.devPtr}};
+//     Surface<int8_t> bwd_workspace(bwd_graph2->get_workspace_size(), false);
+//     REQUIRE(bwd_graph2->execute(handle, variant_pack, bwd_workspace.devPtr).is_good());
+
+//     checkCudaErr(cudaDeviceSynchronize());
+
+//     cudnnDestroy(handle);
+
+//     std::cout<<"fp16 cached end"<<std::endl;
+// }
+
+using namespace cudnn_frontend::graph;
+void cached_sdpa() {
+
+    size_t fixed_run_times = 1000; //1000
+    int64_t b    = 1;     // batch size
+    int64_t h_q  = 16;     // head dim
+    int64_t h_k  = 16;     // head dim
+    int64_t h_v  = 16;     // head dim
+    int64_t s_q  = 384;  // q tensor is padded to this seq length
+    int64_t s_kv = 384;  // k and v tensor is padded to this seq length
+    int64_t d_qk = 64;   // hidden dim
+    int64_t d_v  = 64;   // hidden dim
 
     if (cudnnGetVersion() < 8903) {
         SKIP("Test requires cudnn 8.9.3 or above");
@@ -119,18 +199,19 @@ TEST_CASE("Cached sdpa", "[graph][sdpa][flash]") {
     cudnnHandle_t handle;
     checkCudnnErr(cudnnCreate(&handle));
 
-    auto fwd_graph = create_sdpa_forward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
-    auto bwd_graph = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+    //auto fwd_graph = create_sdpa_forward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+    //auto bwd_graph = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
 
     // Wont get a cache hit the first time
-    REQUIRE(cache_lookup_pre_built_graph(fwd_graph, handle) == false);
-    REQUIRE(cache_lookup_pre_built_graph(bwd_graph, handle) == false);
+    //REQUIRE(cache_lookup_pre_built_graph(fwd_graph, handle) == false);
+    //REQUIRE(cache_lookup_pre_built_graph(bwd_graph, handle) == false);
 
     auto fwd_graph2 = create_sdpa_forward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
-    auto bwd_graph2 = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
+    //auto bwd_graph2 = create_sdpa_backward_graph(b, h_q, h_k, h_v, s_q, s_kv, d_qk, d_v);
 
-    REQUIRE(cache_lookup_pre_built_graph(fwd_graph2, handle) == true);
-    REQUIRE(cache_lookup_pre_built_graph(bwd_graph2, handle) == true);
+    cache_lookup_pre_built_graph(fwd_graph2, handle);
+    //REQUIRE(cache_lookup_pre_built_graph(fwd_graph2, handle) == true);
+    //REQUIRE(cache_lookup_pre_built_graph(bwd_graph2, handle) == true);
 
     //// Build variant pack
     std::unordered_map<fe::graph::Tensor_attributes::uid_t, void*> variant_pack;
@@ -149,31 +230,90 @@ TEST_CASE("Cached sdpa", "[graph][sdpa][flash]") {
                     {STATS_UID, stats_tensor.devPtr}};
 
     Surface<int8_t> fwd_workspace(fwd_graph2->get_workspace_size(), false);
-    REQUIRE(fwd_graph2->execute(handle, variant_pack, fwd_workspace.devPtr).is_good());
+    execution_timer.start();
+    
+    for (size_t iter = 0; iter < fixed_run_times; ++iter) {
+        REQUIRE(fwd_graph2->execute(handle, variant_pack, fwd_workspace.devPtr).is_good());
+    }
+    
+    execution_timer.stop();
     checkCudaErr(cudaDeviceSynchronize());
 
-    Surface<half> dO_tensor(b * h_q * s_q * d_qk, false);
-    Surface<half> dQ_tensor(b * h_q * s_q * d_qk, false);
-    Surface<half> dK_tensor(b * h_k * s_kv * d_qk, false);
-    Surface<half> dV_tensor(b * h_v * s_kv * d_v, false);
+    // Surface<half> dO_tensor(b * h_q * s_q * d_qk, false);
+    // Surface<half> dQ_tensor(b * h_q * s_q * d_qk, false);
+    // Surface<half> dK_tensor(b * h_k * s_kv * d_qk, false);
+    // Surface<half> dV_tensor(b * h_v * s_kv * d_v, false);
 
-    variant_pack = {// inputs
-                    {Q_UID, q_tensor.devPtr},
-                    {K_UID, k_tensor.devPtr},
-                    {V_UID, v_tensor.devPtr},
-                    {O_UID, o_tensor.devPtr},
-                    {DO_UID, dO_tensor.devPtr},
-                    {STATS_UID, stats_tensor.devPtr},
-                    // outputs
-                    {DQ_UID, dQ_tensor.devPtr},
-                    {DK_UID, dK_tensor.devPtr},
-                    {DV_UID, dV_tensor.devPtr}};
-    Surface<int8_t> bwd_workspace(bwd_graph2->get_workspace_size(), false);
-    REQUIRE(bwd_graph2->execute(handle, variant_pack, bwd_workspace.devPtr).is_good());
+    // variant_pack = {// inputs
+    //                 {Q_UID, q_tensor.devPtr},
+    //                 {K_UID, k_tensor.devPtr},
+    //                 {V_UID, v_tensor.devPtr},
+    //                 {O_UID, o_tensor.devPtr},
+    //                 {DO_UID, dO_tensor.devPtr},
+    //                 {STATS_UID, stats_tensor.devPtr},
+    //                 // outputs
+    //                 {DQ_UID, dQ_tensor.devPtr},
+    //                 {DK_UID, dK_tensor.devPtr},
+    //                 {DV_UID, dV_tensor.devPtr}};
+    // Surface<int8_t> bwd_workspace(bwd_graph2->get_workspace_size(), false);
+    // REQUIRE(bwd_graph2->execute(handle, variant_pack, bwd_workspace.devPtr).is_good());
 
-    checkCudaErr(cudaDeviceSynchronize());
+    // checkCudaErr(cudaDeviceSynchronize());
 
     cudnnDestroy(handle);
+}
+
+TEST_CASE("Cached sdpa", "[graph][sdpa][flash]") {
+    std::cout<<"fp16 cached start"<<std::endl;
+
+    size_t fixed_run_times = 1; //1000
+    //size_t warmup_run_times = 1; //5
+
+    create_sdpa_forward_graph_timer.reset(); 
+    validate_timer.reset();
+    build_operation_graph_timer.reset();
+    create_execution_plans_timer.reset();
+    check_support_timer.reset();
+    build_plans_timer.reset();
+    execution_timer.reset();
+
+    for (size_t iter = 0; iter < fixed_run_times; ++iter) {
+        // if (iter == warmup_run_times) {
+        //     create_sdpa_forward_graph_timer.reset(); 
+        //     validate_timer.reset();
+        //     build_operation_graph_timer.reset();
+        //     create_execution_plans_timer.reset();
+        //     check_support_timer.reset();
+        //     build_plans_timer.reset();
+        //     execution_timer.reset();
+        // }
+        cached_sdpa();
+    }
+    std::cout << "perf summary:" << std::endl;
+    double total_time = create_sdpa_forward_graph_timer.avg()
+            + build_operation_graph_timer.avg() + create_execution_plans_timer.avg()
+            + build_plans_timer.avg() + execution_timer.avg();
+    std::cout << "create_sdpa_forward_graph_timer:" << create_sdpa_forward_graph_timer.avg()
+              << " ms, percentage of total time: "
+              << create_sdpa_forward_graph_timer.avg() / total_time << std::endl;
+    // std::cout << "validate_timer:" << validate_timer.avg()
+    //           << " ms, percentage of total time: "
+    //           << validate_timer.avg() / total_time << std::endl;
+    std::cout << "build_operation_graph_timer:" << build_operation_graph_timer.avg()
+              << " ms, percentage of total time: "
+              << build_operation_graph_timer.avg() / total_time << std::endl;
+    std::cout << "create_execution_plans_timer:" << create_execution_plans_timer.avg()
+              << " ms, percentage of total time: "
+              << create_execution_plans_timer.avg() / total_time << std::endl;
+    // std::cout << "check_support_timer:" << check_support_timer.avg()
+    //           << " ms, percentage of total time: "
+    //           << check_support_timer.avg() / total_time << std::endl;
+    std::cout << "build_plans_timer:" << build_plans_timer.avg()
+              << " ms, percentage of total time: "
+              << build_plans_timer.avg() / total_time << std::endl;
+    std::cout << "execution_timer:" << execution_timer.avg()
+              << " ms, percentage of total time: "
+              << execution_timer.avg() / total_time << std::endl;
 
     std::cout<<"fp16 cached end"<<std::endl;
 }

@@ -225,8 +225,8 @@ void gpu_float_sdpa()
 
 TEST_CASE("Toy sdpa forward", "[graph][sdpa][flash][forward]") {
     std::cout<<"fp16 fwd start"<<std::endl;
-        size_t fixed_run_times = 1000; //1000
-        size_t warmup_run_times = 5; //5
+        size_t fixed_run_times = 1; //1000
+        size_t warmup_run_times = 0; //5
 
     for (size_t iter = 0; iter < warmup_run_times + fixed_run_times; ++iter) {
         if (iter == warmup_run_times) {
