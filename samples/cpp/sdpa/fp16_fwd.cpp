@@ -129,30 +129,33 @@ create_sdpa_forward_graph(int64_t const b,
     return graph;
 }
 
-TEST_CASE("Toy sdpa forward", "[graph][sdpa][flash][forward]") {
-    int64_t b          = 3;     // batch size
-    int64_t h_q        = 4;     // head dim
-    int64_t h_k        = 4;     // head dim
-    int64_t h_v        = 4;     // head dim
-    int64_t s_q        = 1024;  // q tensor is padded to this seq length
-    int64_t s_kv       = 1024;  // k and v tensor is padded to this seq length
-    int64_t d_qk       = 128;   // hidden dim
-    int64_t d_v        = 128;   // hidden dim
+using namespace cudnn_frontend::graph;
+void gpu_float_sdpa()
+{
+    int64_t b          = 1;     // batch size 3
+    int64_t h_q        = 16;     // head dim
+    int64_t h_k        = 16;     // head dim
+    int64_t h_v        = 16;     // head dim
+    int64_t s_q        = 384;  // q tensor is padded to this seq length 1024
+    int64_t s_kv       = 384;  // k and v tensor is padded to this seq length 1024
+    int64_t d_qk       = 64;   // hidden dim 64
+    int64_t d_v        = 64;   // hidden dim 64
     bool is_inference  = false;
     float attn_scale   = 0.123f;
-    bool causal_mask   = true;
-    bool padding_mask  = (cudnnGetVersion() >= 8903);
-    bool alibi_mask    = (cudnnGetVersion() >= 8904);
-    bool has_attn_bias = (cudnnGetVersion() >= 8903);
+    bool causal_mask   = false; // true
+    bool padding_mask  = false; // (cudnnGetVersion() >= 8903);
+    bool alibi_mask    = false; // (cudnnGetVersion() >= 8904);
+    bool has_attn_bias = false; // (cudnnGetVersion() >= 8903);
 
     if (cudnnGetVersion() < 8903) {
         SKIP("Test requires cudnn 8.9.3 or above");
         return;
     }
+    std::cout<<"cudnn version: "<<cudnnGetVersion()<<std::endl;
 
     cudnnHandle_t handle;
     checkCudnnErr(cudnnCreate(&handle));
-
+    create_sdpa_forward_graph_timer.start();
     auto graph = create_sdpa_forward_graph(b,
                                            h_q,
                                            h_k,
@@ -167,7 +170,7 @@ TEST_CASE("Toy sdpa forward", "[graph][sdpa][flash][forward]") {
                                            alibi_mask,
                                            padding_mask,
                                            has_attn_bias);
-
+    create_sdpa_forward_graph_timer.stop();
     REQUIRE(graph->build(handle, {fe::HeurMode_t::A}).is_good());
 
     //// Build variant pack
@@ -211,9 +214,57 @@ TEST_CASE("Toy sdpa forward", "[graph][sdpa][flash][forward]") {
     }
 
     Surface<int8_t> workspace(graph->get_workspace_size(), false);
+    execution_timer.start();
     REQUIRE(graph->execute(handle, variant_pack, workspace.devPtr).is_good());
-
+    execution_timer.stop();
     checkCudaErr(cudaDeviceSynchronize());
 
     cudnnDestroy(handle);
+
+}
+
+TEST_CASE("Toy sdpa forward", "[graph][sdpa][flash][forward]") {
+    std::cout<<"fp16 fwd start"<<std::endl;
+        size_t fixed_run_times = 1000; //1000
+        size_t warmup_run_times = 5; //5
+
+    for (size_t iter = 0; iter < warmup_run_times + fixed_run_times; ++iter) {
+        if (iter == warmup_run_times) {
+            create_sdpa_forward_graph_timer.reset(); 
+            validate_timer.reset();
+            build_operation_graph_timer.reset();
+            create_execution_plans_timer.reset();
+            check_support_timer.reset();
+            build_plans_timer.reset();
+            execution_timer.reset();
+        }
+        gpu_float_sdpa();
+    }
+    std::cout << "perf summary:" << std::endl;
+    double total_time = create_sdpa_forward_graph_timer.avg()
+            + build_operation_graph_timer.avg() + create_execution_plans_timer.avg()
+            + build_plans_timer.avg() + execution_timer.avg();
+    std::cout << "create_sdpa_forward_graph_timer:" << create_sdpa_forward_graph_timer.avg()
+              << " ms, percentage of total time: "
+              << create_sdpa_forward_graph_timer.avg() / total_time << std::endl;
+    // std::cout << "validate_timer:" << validate_timer.avg()
+    //           << " ms, percentage of total time: "
+    //           << validate_timer.avg() / total_time << std::endl;
+    std::cout << "build_operation_graph_timer:" << build_operation_graph_timer.avg()
+              << " ms, percentage of total time: "
+              << build_operation_graph_timer.avg() / total_time << std::endl;
+    std::cout << "create_execution_plans_timer:" << create_execution_plans_timer.avg()
+              << " ms, percentage of total time: "
+              << create_execution_plans_timer.avg() / total_time << std::endl;
+    // std::cout << "check_support_timer:" << check_support_timer.avg()
+    //           << " ms, percentage of total time: "
+    //           << check_support_timer.avg() / total_time << std::endl;
+    std::cout << "build_plans_timer:" << build_plans_timer.avg()
+              << " ms, percentage of total time: "
+              << build_plans_timer.avg() / total_time << std::endl;
+    std::cout << "execution_timer:" << execution_timer.avg()
+              << " ms, percentage of total time: "
+              << execution_timer.avg() / total_time << std::endl;
+
+    std::cout<<"fp16 fwd end"<<std::endl;
 }

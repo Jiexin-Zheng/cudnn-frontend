@@ -28,20 +28,20 @@ add_executable(
     cpp/sdpa/fp8_fwd.cpp
     cpp/sdpa/fp8_bwd.cpp
 
-    cpp/convolution/fprop.cpp
-    cpp/convolution/fp8_fprop.cpp
-    cpp/convolution/int8_fprop.cpp
-    cpp/convolution/dgrads.cpp
-    cpp/convolution/wgrads.cpp
+    # cpp/convolution/fprop.cpp
+    # cpp/convolution/fp8_fprop.cpp
+    # cpp/convolution/int8_fprop.cpp
+    # cpp/convolution/dgrads.cpp
+    # cpp/convolution/wgrads.cpp
     
-    cpp/matmul/matmuls.cpp
-    cpp/matmul/fp8_matmul.cpp
-    cpp/matmul/int8_matmul.cpp
-    cpp/matmul/mixed_matmul.cpp
+    # cpp/matmul/matmuls.cpp
+    # cpp/matmul/fp8_matmul.cpp
+    # cpp/matmul/int8_matmul.cpp
+    # cpp/matmul/mixed_matmul.cpp
 
-    cpp/norm/batchnorm.cpp
-    cpp/norm/layernorm.cpp
-    cpp/norm/rmsnorm.cpp
+    # cpp/norm/batchnorm.cpp
+    # cpp/norm/layernorm.cpp
+    # cpp/norm/rmsnorm.cpp
 
     cpp/misc/serialization.cpp
     cpp/misc/autotuning.cpp

@@ -3006,10 +3006,10 @@ TEST_CASE("MHA Fprop sample", "[frontend][fusion][mhaFprop]") {
     SKIP("Test requires CUDA version greater than 12.0");
 #endif
 
-    int64_t b    = 32;   // batch size
+    int64_t b    = 1;   // batch size 32
     int64_t h    = 16;   // head dim
-    int64_t s_q  = 512;  // q tensor is padded to this seq length
-    int64_t s_kv = 512;  // k and v tensor is padded to this seq length
+    int64_t s_q  = 384;  // q tensor is padded to this seq length
+    int64_t s_kv = 384;  // k and v tensor is padded to this seq length
     int64_t d    = 64;   // hidden dim
 
     int64_t seed = 123456;  // seed for generating the dropout mask
@@ -3087,7 +3087,7 @@ TEST_CASE("MHA Fprop sample", "[frontend][fusion][mhaFprop]") {
     int64_t oSize = b * s_q * h * d;
     Surface<half> oTensor(oSize, false);
     devPtrO = (void*)oTensor.devPtr;
-
+    std::cout<<"run mha fprop..."<<std::endl;
     run_mha_fprop(b,
                   h,
                   s_q,

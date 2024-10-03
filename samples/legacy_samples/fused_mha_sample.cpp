@@ -43,6 +43,34 @@
 
 #define VIRTUAL_ID 20
 
+struct timers_t {
+    void reset() {
+        ms_start_ = 0;
+        sum_ = 0;
+        ticks_ = 0;
+    }
+    void start() { ms_start_ = ms_now(); }
+    void stop() {
+        double cur_time = ms_now() - ms_start_;
+        sum_ += cur_time;
+        ticks_++;
+    }
+    double avg() { return sum_ / ticks_; }
+    double ms_now() {
+        auto timePointTmp
+                = std::chrono::high_resolution_clock::now().time_since_epoch();
+        return std::chrono::duration<double, std::milli>(timePointTmp).count();
+    }
+
+    double ms_start_ = 0;
+    double sum_ = 0;
+    size_t ticks_ = 0;
+};
+
+
+static timers_t op_and_tensor_creation_timer, operation_graph_building_timer, get_heuristics_timer,
+        build_execution_plans_timer, plan_execution_timer;
+
 static bool
 allowAllConfig(cudnnBackendDescriptor_t engine_config) {
     (void)engine_config;
@@ -859,6 +887,8 @@ execute_cached_plan(cudnnHandle_t handle,
         workspace_size = cached_plan->getWorkspaceSize();
         raw_plan       = cached_plan->get_raw_desc();
     } else {
+        std::cout << "Cached execution plan not found." << cached_plan->getTag() << std::endl;
+        get_heuristics_timer.start();
         cudnn_frontend::EngineConfigList filtered_configs;
         auto statuses = cudnn_frontend::get_heuristics_list<1>(
             {"heuristics_instant"}, opGraph, ::allowAllConfig, filtered_configs, true);
@@ -867,16 +897,18 @@ execute_cached_plan(cudnnHandle_t handle,
             cudnn_frontend::set_error_and_throw_exception(
                 nullptr, CUDNN_STATUS_NOT_SUPPORTED, "run_mha_fprop: No config returned by the heuristics");
         }
-
+        get_heuristics_timer.stop();
+        build_execution_plans_timer.start();
         auto plan_ = cudnn_frontend::ExecutionPlanBuilder()
                          .setHandle(handle)
                          .setEngineConfig(filtered_configs[0], opGraph.getTag())
                          .build();
-        plan_cache.add_plan_to_cache(opGraph, plan_);
+        build_execution_plans_timer.stop();
+        //plan_cache.add_plan_to_cache(opGraph, plan_);
         workspace_size = plan_.getWorkspaceSize();
         raw_plan       = plan_.get_raw_desc();
     }
-
+    plan_execution_timer.start();
     void* workspace_ptr = nullptr;
     if (workspace_size > 0) {
         checkCudaErr(cudaMalloc(&workspace_ptr, workspace_size));
@@ -886,9 +918,8 @@ execute_cached_plan(cudnnHandle_t handle,
         cudnn_frontend::VariantPackBuilder().setWorkspacePointer(workspace_ptr).setDataPointers(data_ptrs).build();
 
     std::cout << "variantPack " << variantPack.describe() << std::endl;
-
     cudnnStatus_t status = cudnnBackendExecute(handle, raw_plan, variantPack.get_raw_desc());
-
+    plan_execution_timer.stop();
     if (workspace_size > 0) {
         checkCudaErr(cudaFree(workspace_ptr));
     }
@@ -898,8 +929,227 @@ execute_cached_plan(cudnnHandle_t handle,
     return status;
 }
 
+// void
+// run_mha_fprop(int64_t b,
+//               int64_t h,
+//               int64_t s_q,
+//               int64_t s_kv,
+//               int64_t d,
+//               int64_t seed,
+//               MHA_Layout layout,
+//               half1 scaling_factor,
+//               double dropout_probability,
+//               MHA_Bias_Type bias_type,
+//               bool is_causal_masking,
+//               void* devPtrQ,
+//               void* devPtrK,
+//               void* devPtrV,
+//               void* devPtrS,
+//               void* devPtrO,
+//               void* devPtrBias,
+//               void* devActualSeqlenQ,
+//               void* devActualSeqlenK,
+//               cudnnDataType_t tensorType) {
+//     cudnnHandle_t handle_;
+//     try {
+//         // Create cudnn handle
+//         checkCudnnErr(cudnnCreate(&handle_));
+
+//         op_and_tensor_creation_timer.start();
+//         std::vector<cudnn_frontend::Operation const*> all_ops;
+//         std::vector<cudnn_frontend::Operation> ops;
+//         std::set<std::pair<uint64_t, void*>> data_ptrs;
+
+//         createScale(b, h, s_q, s_kv, d, layout, tensorType, ops);
+
+//         std::shared_ptr<cudnn_frontend::Tensor> maskInput;
+
+//         auto bmm1_output = createBMM1(b, h, s_q, s_kv, d, layout, tensorType, ops);
+
+//         if (bias_type != MHA_Bias_Type::NO_BIAS) {
+//             auto bias_output = createBias(b, h, s_q, s_kv, d, layout, tensorType, ops, bmm1_output);
+//             maskInput        = std::make_shared<cudnn_frontend::Tensor>(std::move(bias_output));
+//         } else {
+//             maskInput = std::make_shared<cudnn_frontend::Tensor>(std::move(bmm1_output));
+//         }
+
+//         float negInfinity = -1.0E+20f;  // change this if you have access to float_min
+//         auto mask_output =
+//             createMask(b, h, s_q, s_kv, d, layout, is_causal_masking, tensorType, ops, *maskInput.get(), false);
+
+//         bool enable_dropout = (dropout_probability != 0.0f);
+//         cudnn_frontend::throw_if(
+//             dropout_probability == 1.0f, "Dropout probability cannot be 1.0", CUDNN_STATUS_BAD_PARAM);
+
+//         // needs to be bf16 (Please change)
+//         half1 scale_dropout = cpu_float2half_rn(static_cast<float>(1 / (1 - dropout_probability)));
+
+//         bool softmax_output_virtual = enable_dropout || devPtrS == nullptr;
+//         auto softmax_output         = createSoftmaxForward(
+//             b, h, s_q, s_kv, d, layout, enable_dropout, softmax_output_virtual, tensorType, ops, mask_output);
+
+//         if (dropout_probability != 0.0f) {
+//             auto dropout_output =
+//                 createDropout(b, h, s_q, s_kv, d, seed, dropout_probability, tensorType, ops, softmax_output);
+//             createBMM2(b, h, s_q, s_kv, d, layout, tensorType, ops, dropout_output);
+//         } else {
+//             createBMM2(b, h, s_q, s_kv, d, layout, tensorType, ops, softmax_output);
+//         }
+
+//         std::cout << "Total ops created: " << ops.size() << std::endl;
+
+//         for (unsigned int i = 0; i < ops.size(); i++) {
+//             all_ops.push_back(&ops[i]);
+//         }
+//         op_and_tensor_creation_timer.stop();
+
+//         operation_graph_building_timer.start();
+//         // Create an Operation Graph
+//         auto opGraph = cudnn_frontend::OperationGraphBuilder()
+//                            .setHandle(handle_)
+//                            .setOperationGraph(all_ops.size(), all_ops.data())
+//                            .build();
+
+//         // {b, h, s_q, s_kv, d, seed, layout(enum class, should be int), bias_type(enum class, should be int),
+//         // is_causal_masking(bool), tensorType(cudnnDataType_t)}
+//         opGraph.setFeatureVector({b,
+//                                   h,
+//                                   s_q,
+//                                   s_kv,
+//                                   d,
+//                                   seed,
+//                                   static_cast<int64_t>(layout),
+//                                   static_cast<int64_t>(bias_type),
+//                                   static_cast<int64_t>(is_causal_masking),
+//                                   static_cast<int64_t>(tensorType)});
+
+//         operation_graph_building_timer.stop();
+
+//         // add all the data pointers to be used in the variant pack
+//         data_ptrs.insert(std::pair<uint64_t, void*>(Q_ID, devPtrQ));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(K_ID, devPtrK));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(V_ID, devPtrV));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(Q_SEQLEN_ID, devActualSeqlenQ));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(K_SEQLEN_ID, devActualSeqlenK));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(MASK_VAL_ID, &negInfinity));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(S_CONST_ID, &scaling_factor));
+//         data_ptrs.insert(std::pair<uint64_t, void*>(O_ID, devPtrO));
+
+//         if (bias_type != MHA_Bias_Type::NO_BIAS) {
+//             data_ptrs.insert(std::pair<uint64_t, void*>(B_ID, devPtrBias));
+//         }
+
+//         if (devPtrS != nullptr) {
+//             data_ptrs.insert(std::pair<uint64_t, void*>(S_ID, devPtrS));
+//         }
+
+//         if (enable_dropout) {
+//             data_ptrs.insert(std::pair<uint64_t, void*>(D_CONST_ID, &scale_dropout));
+//         }
+
+//         cudnn_frontend::ExecutionPlanCache plan_cache("mha_fprop_cache");
+
+//         execute_cached_plan(handle_, plan_cache, opGraph, data_ptrs);
+
+//         execute_cached_plan(handle_, plan_cache, opGraph, data_ptrs);
+
+//         checkCudnnErr(cudnnDestroy(handle_));
+
+//     } catch (cudnn_frontend::cudnnException& e) {
+//         struct cudaDeviceProp prop;
+//         checkCudaErrors(cudaGetDeviceProperties(&prop, 0));
+
+//         // this example is only for GA100 cards (cudnn Version >= 8700) and GH100 cards (cudnn Version >= 8800)
+//         if (!((prop.major == 8 && prop.minor == 0) || (prop.major == 9 && prop.minor == 0 && CUDNN_VERSION >= 8800)) &&
+//             (e.getCudnnStatus() == CUDNN_STATUS_ARCH_MISMATCH || e.getCudnnStatus() == CUDNN_STATUS_NOT_SUPPORTED)) {
+//             std::cout << "Example is only supported for GA100 (cuDNN >= 8700) and GH100 (cuDNN >= 8800) GPUs"
+//                       << std::endl;
+//         } else {
+//             std::cout << "[ERROR] Exception " << e.what() << std::endl;
+//             CHECK(false);
+//         }
+//     }
+// }
+
+
 void
 run_mha_fprop(int64_t b,
+              int64_t h,
+              int64_t s_q,
+              int64_t s_kv,
+              int64_t d,
+              int64_t seed,
+              MHA_Layout layout,
+              half1 scaling_factor,
+              double dropout_probability,
+              MHA_Bias_Type bias_type,
+              bool is_causal_masking,
+              void* devPtrQ,
+              void* devPtrK,
+              void* devPtrV,
+              void* devPtrS,
+              void* devPtrO,
+              void* devPtrBias,
+              void* devActualSeqlenQ,
+              void* devActualSeqlenK,
+              cudnnDataType_t tensorType) {
+    size_t fixed_run_times = 1000;
+    size_t warmup_run_times = 5;
+
+    for (size_t iter = 0; iter < warmup_run_times + fixed_run_times; ++iter) {
+        if (iter == warmup_run_times) {
+            op_and_tensor_creation_timer.reset(); 
+            operation_graph_building_timer.reset();
+            get_heuristics_timer.reset();
+            build_execution_plans_timer.reset();
+            plan_execution_timer.reset();
+        }
+        std::cout<<"run mha fprop single..."<<std::endl;
+        run_mha_fprop_single(b,
+                    h,
+                    s_q,
+                    s_kv,
+                    d,
+                    seed,
+                    layout,
+                    scaling_factor,
+                    dropout_probability,
+                    bias_type,
+                    is_causal_masking,
+                    devPtrQ,
+                    devPtrK,
+                    devPtrV,
+                    devPtrS,
+                    devPtrO,
+                    devPtrBias,
+                    devActualSeqlenQ,
+                    devActualSeqlenK,
+                    tensorType);
+    }
+
+    std::cout << "perf summary:" << std::endl;
+    double total_time = op_and_tensor_creation_timer.avg() + operation_graph_building_timer.avg() + 
+        get_heuristics_timer.avg() + build_execution_plans_timer.avg() + plan_execution_timer.avg();
+    std::cout << "op_and_tensor_creation_timer:" << op_and_tensor_creation_timer.avg()
+              << " ms, percentage of total time: "
+              << op_and_tensor_creation_timer.avg() / total_time << std::endl;
+    std::cout << "operation_graph_building_timer:" << operation_graph_building_timer.avg()
+              << " ms, percentage of total time: "
+              << operation_graph_building_timer.avg() / total_time << std::endl;
+    std::cout << "get_heuristics_timer:" << get_heuristics_timer.avg()
+              << " ms, percentage of total time: "
+              << get_heuristics_timer.avg() / total_time << std::endl;
+    std::cout << "build_execution_plans_timer:" << build_execution_plans_timer.avg()
+              << " ms, percentage of total time: "
+              << build_execution_plans_timer.avg() / total_time << std::endl;
+    std::cout << "plan_execution_timer:" << plan_execution_timer.avg()
+              << " ms, percentage of total time: "
+              << plan_execution_timer.avg() / total_time << std::endl;
+
+}
+
+void
+run_mha_fprop_single(int64_t b,
               int64_t h,
               int64_t s_q,
               int64_t s_kv,
@@ -924,6 +1174,7 @@ run_mha_fprop(int64_t b,
         // Create cudnn handle
         checkCudnnErr(cudnnCreate(&handle_));
 
+        op_and_tensor_creation_timer.start();
         std::vector<cudnn_frontend::Operation const*> all_ops;
         std::vector<cudnn_frontend::Operation> ops;
         std::set<std::pair<uint64_t, void*>> data_ptrs;
@@ -969,7 +1220,9 @@ run_mha_fprop(int64_t b,
         for (unsigned int i = 0; i < ops.size(); i++) {
             all_ops.push_back(&ops[i]);
         }
+        op_and_tensor_creation_timer.stop();
 
+        operation_graph_building_timer.start();
         // Create an Operation Graph
         auto opGraph = cudnn_frontend::OperationGraphBuilder()
                            .setHandle(handle_)
@@ -988,6 +1241,8 @@ run_mha_fprop(int64_t b,
                                   static_cast<int64_t>(bias_type),
                                   static_cast<int64_t>(is_causal_masking),
                                   static_cast<int64_t>(tensorType)});
+
+        operation_graph_building_timer.stop();
 
         // add all the data pointers to be used in the variant pack
         data_ptrs.insert(std::pair<uint64_t, void*>(Q_ID, devPtrQ));
@@ -1013,7 +1268,7 @@ run_mha_fprop(int64_t b,
 
         cudnn_frontend::ExecutionPlanCache plan_cache("mha_fprop_cache");
 
-        execute_cached_plan(handle_, plan_cache, opGraph, data_ptrs);
+        //execute_cached_plan(handle_, plan_cache, opGraph, data_ptrs);
 
         execute_cached_plan(handle_, plan_cache, opGraph, data_ptrs);
 
